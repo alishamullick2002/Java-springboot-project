@@ -24,7 +24,7 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      - name: Build with Maven
+      - name: Build Application
         run: mvn -f backend/pom.xml clean package -DskipTests
 
       - name: Deploy to EC2
@@ -34,32 +34,32 @@ jobs:
           username: ec2-user
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            sudo su - <<'EOF'
             set -e
 
-            PROJECT_DIR=/root/Java-springboot-project
+            sudo su - <<'EOF'
 
-            if [ ! -d "$PROJECT_DIR/.git" ]; then
-              git clone https://github.com/alishamullick2002/Java-springboot-project.git "$PROJECT_DIR"
-            fi
+            cd /root/Java-springboot-project
 
-            cd "$PROJECT_DIR"
-
+            echo "Updating repository..."
             git fetch origin
             git reset --hard origin/main
 
             cd backend
 
+            echo "Building application..."
             mvn clean package -DskipTests
 
-            pkill -f "datastore-0.0.7.jar" || true
+            echo "Restarting service..."
+            systemctl daemon-reload
+            systemctl restart datastore-backend
 
-            nohup java -jar target/datastore-0.0.7.jar > backend.log 2>&1 &
+            echo "Waiting for application..."
+            sleep 10
 
-            sleep 20
+            echo "Service status:"
+            systemctl status datastore-backend --no-pager
 
-            ps -ef | grep datastore | grep -v grep || true
-
-            ss -tulnp | grep 8084 || true
+            echo "Listening ports:"
+            ss -tulnp | grep 8084
 
             EOF
