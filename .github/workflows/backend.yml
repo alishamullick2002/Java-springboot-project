@@ -30,7 +30,7 @@ jobs:
         username: ${{ secrets.EC2_USERNAME }}
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
-          cd /root/Java-Springboot-Project/backend
+          cd /root/Java-Springboot-project/backend
           git pull origin main
           mvn clean package -DskipTests
           sudo systemctl restart datastore-backend
