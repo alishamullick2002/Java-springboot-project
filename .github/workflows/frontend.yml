@@ -1,43 +1,87 @@
-- name: Deploy via SSH
-  uses: appleboy/ssh-action@v1.2.0
-  with:
-    host: ${{ secrets.EC2_HOST }}
-    username: ec2-user
-    key: ${{ secrets.EC2_SSH_KEY }}
-    script: |
-      set -e
+name: Deploy Streamlit Frontend to EC2
 
-      APP_DIR=/home/ec2-user/front
-      REPO_NAME=Java-springboot-project
-      REPO_URL=https://github.com/alishamullick2002/Java-springboot-project.git
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'frontend/**'
 
-      mkdir -p $APP_DIR
-      cd $APP_DIR
+  workflow_dispatch:
 
-      if [ -d "$REPO_NAME/.git" ]; then
-        cd $REPO_NAME
-        git fetch origin
-        git reset --hard origin/main
-      else
-        git clone $REPO_URL
-        cd $REPO_NAME
-      fi
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
 
-      sudo dnf install -y python3 python3-pip
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-      cd frontend
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
 
-      if [ ! -d "venv" ]; then
-        python3 -m venv venv
-      fi
+            APP_DIR=/home/ec2-user/front
+            REPO_NAME=Java-springboot-project
+            REPO_URL=https://github.com/alishamullick2002/Java-springboot-project.git
 
-      source venv/bin/activate
+            echo "🚀 Starting Frontend Deployment..."
 
-      pip install --upgrade pip
-      pip install -r requirements.txt
+            mkdir -p $APP_DIR
+            cd $APP_DIR
 
-      sudo systemctl daemon-reload
-      sudo systemctl restart frontend
-      sudo systemctl status frontend --no-pager
+            if [ -d "$REPO_NAME/.git" ]; then
+              echo "Updating existing repository..."
+              cd $REPO_NAME
+              git fetch origin
+              git reset --hard origin/main
+            else
+              echo "Cloning repository..."
+              git clone $REPO_URL
+              cd $REPO_NAME
+            fi
 
-      echo "✅ Deployment successful"
+            echo "Installing Python..."
+            sudo dnf install -y python3 python3-pip
+
+            cd frontend
+
+            if [ ! -d "venv" ]; then
+              python3 -m venv venv
+            fi
+
+            source venv/bin/activate
+
+            pip install --upgrade pip
+            pip install -r requirements.txt
+
+            echo "Creating frontend systemd service..."
+
+            sudo tee /etc/systemd/system/frontend.service > /dev/null <<EOF
+            [Unit]
+            Description=Streamlit Frontend
+            After=network.target
+
+            [Service]
+            User=ec2-user
+            WorkingDirectory=/home/ec2-user/front/Java-springboot-project/frontend
+            ExecStart=/bin/bash -c 'source /home/ec2-user/front/Java-springboot-project/frontend/venv/bin/activate && streamlit run app.py --server.port=8501 --server.address=0.0.0.0'
+            Environment=API_URL=http://localhost:8084
+            Restart=always
+            RestartSec=5
+
+            [Install]
+            WantedBy=multi-user.target
+            EOF
+
+            sudo systemctl daemon-reload
+            sudo systemctl enable frontend
+            sudo systemctl restart frontend
+            sudo systemctl status frontend --no-pager
+
+            echo "✅ Frontend deployment completed successfully."
