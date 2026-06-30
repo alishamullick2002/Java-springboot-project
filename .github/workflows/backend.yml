@@ -35,3 +35,4 @@ jobs:
           mvn clean package -DskipTests
           sudo systemctl restart datastore-backend
           sudo systemctl status datastore-backend
+          
