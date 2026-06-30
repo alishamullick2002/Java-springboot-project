@@ -31,44 +31,38 @@ jobs:
         uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
+          username: root
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             set -e
 
-            echo "===== Updating Repository ====="
+            PROJECT_DIR=/root/Java-springboot-project
 
-            if [ ! -d "/root/Java-springboot-project/.git" ]; then
-              sudo git clone https://github.com/alishamullick2002/Java-springboot-project.git /root/Java-springboot-project
-            fi
+            cd $PROJECT_DIR
 
-            cd /root/Java-springboot-project
-
-            sudo git fetch origin
-            sudo git reset --hard origin/main
-
-            echo "===== Building Backend ====="
+            echo "Updating repository..."
+            git fetch origin
+            git reset --hard origin/main
 
             cd backend
 
-            sudo mvn clean package -DskipTests
+            echo "Building application..."
+            mvn clean package -DskipTests
 
-            echo "===== Stopping Existing Application ====="
-
-            sudo pkill -f "datastore-0.0.7.jar" || true
+            echo "Stopping existing application..."
+            pkill -f "datastore-0.0.7.jar" || true
 
             sleep 5
 
-            echo "===== Starting Spring Boot Application ====="
-
-            sudo nohup java -jar target/datastore-0.0.7.jar > /root/Java-springboot-project/backend/backend.log 2>&1 &
+            echo "Starting application..."
+            nohup java -jar target/datastore-0.0.7.jar > backend.log 2>&1 &
 
             sleep 20
 
-            echo "===== Running Java Process ====="
+            echo "Checking Java process..."
             ps -ef | grep datastore | grep -v grep || true
 
-            echo "===== Listening Ports ====="
-            sudo ss -tulnp | grep 8084 || true
+            echo "Checking listening port..."
+            ss -tulnp | grep 8084 || true
 
-            echo "===== Deployment Completed ====="
+            echo "Deployment completed successfully."
