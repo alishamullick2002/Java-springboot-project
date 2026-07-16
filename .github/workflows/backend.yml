@@ -18,22 +18,20 @@ jobs:
           java-version: 21
           cache: maven
 
-      - name: Prepare EC2
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            sudo yum install -y git maven java-21-amazon-corretto
+      - name: Build Project
+        run: |
+          cd backend
+          mvn clean package -DskipTests
 
-      - name: Clone or Update Repository
+      - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.1.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
           script: |
+            set -e
+
             APP_DIR=/home/ec2-user/app
             REPO_NAME=Java-springboot-project
             REPO_URL=https://github.com/alishamullick2002/Java-springboot-project.git
@@ -50,58 +48,43 @@ jobs:
               cd $REPO_NAME
             fi
 
-      - name: Build Maven Project
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            cd /home/ec2-user/app/Java-springboot-project/backend
+            cd backend
             mvn clean package -DskipTests
 
-      - name: Deploy Application
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            set -e
+            mkdir -p /var/log/app
 
-            LOG_DIR=/var/log/app
-            sudo mkdir -p $LOG_DIR
-            sudo chown ec2-user:ec2-user $LOG_DIR
-
-            # Stop previous application
             pkill -f datastore-0.0.7.jar || true
             sleep 5
 
-            cd /home/ec2-user/app/Java-springboot-project/backend/target
+            cd target
 
             nohup env \
-              MYSQL_HOST="${{ secrets.DB_HOST }}" \
-              MYSQL_USERNAME="${{ secrets.DB_USERNAME }}" \
-              MYSQL_PASSWORD="${{ secrets.DB_PASSWORD }}" \
-              LOG_FILE_PATH="$LOG_DIR/datastore.log" \
-              java -jar datastore-0.0.7.jar --server.port=8084 \
-              > "$LOG_DIR/nohup.out" 2>&1 &
+            MYSQL_HOST=${{ secrets.DB_HOST }} \
+            MYSQL_USERNAME=${{ secrets.DB_USERNAME }} \
+            MYSQL_PASSWORD=${{ secrets.DB_PASSWORD }} \
+            LOG_FILE_PATH=/var/log/app/datastore.log \
+            java -jar datastore-0.0.7.jar --server.port=8084 \
+            >/var/log/app/nohup.out 2>&1 &
 
-            sleep 30
+            sleep 20
 
-            echo "Running Java Process:"
+            echo "Java Process:"
             ps -ef | grep datastore || true
 
-            echo "Application Health Check:"
-            curl -f http://localhost:8084/actuator/health
+            echo "Health Check"
 
-      - name: Show Application Logs
-        if: always()
-        uses: appleboy/ssh-action@v1.1.0
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ec2-user
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            echo "===== Last 100 lines of nohup.out ====="
+            for i in {1..12}
+            do
+              if curl -fs http://localhost:8084/actuator/health; then
+                echo "Application is UP"
+                exit 0
+              fi
+              echo "Waiting for application..."
+              sleep 5
+            done
+
+            echo "Application failed to start"
+
             tail -100 /var/log/app/nohup.out || true
+
+            exit 1
