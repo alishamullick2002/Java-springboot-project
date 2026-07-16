@@ -1,93 +1,74 @@
-pipeline {
-    agent any
+name: Frontend CI/CD
 
-    environment {
-        AWS_REGION      = "us-east-1"
-        AWS_ACCOUNT_ID  = "341221860475"
-        ECR_REPO        = "frontend"
-        IMAGE_TAG       = "${BUILD_NUMBER}"
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-        IMAGE_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
-        CONTAINER_NAME = "frontend"
-    }
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: 891377138880
+  ECR_REPOSITORY: frontend
+  IMAGE_TAG: ${{ github.run_number }}
 
-    stages {
-        
-        stage('Clean Workspace') {
-            steps {
-                cleanWs()
-            }
-        }
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
 
-        stage('Checkout') {
-            steps {
-                git branch: 'main',
-                    url: 'https://github.com/CloudTechDevOps/Java-springboot-project.git'
-            }
-        }
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-        stage('Build Docker Image') {
-            steps {
-                dir('frontend') {
-                    sh """
-                        docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                    """
-                }
-            }
-        }
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-        stage('Login to ECR') {
-            steps {
-                sh """
-                aws ecr get-login-password --region ${AWS_REGION} | \
-                docker login --username AWS --password-stdin \
-                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                """
-            }
-        }
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-        stage('Tag Image') {
-            steps {
-                sh """
-                docker tag ${ECR_REPO}:${IMAGE_TAG} ${IMAGE_URI}
-                """
-            }
-        }
+      - name: Build Docker Image
+        working-directory: frontend
+        run: |
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-        stage('Push Image to ECR') {
-            steps {
-                sh """
-                docker push ${IMAGE_URI}
-                """
-            }
-        }
+      - name: Push Docker Image to ECR
+        run: |
+          docker push \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-        stage('Deploy') {
-            steps {
-                sh """
-                docker stop ${CONTAINER_NAME} || true
-                docker rm ${CONTAINER_NAME} || true
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            AWS_REGION=us-east-1
+            AWS_ACCOUNT_ID=891377138880
+            ECR_REPOSITORY=frontend
+            IMAGE_TAG=${{ github.run_number }}
 
-                docker pull ${IMAGE_URI}
+            aws ecr get-login-password --region $AWS_REGION | \
+            docker login --username AWS --password-stdin \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-                docker run -d \
-                  --name ${CONTAINER_NAME} \
-                  --restart always \
-                  -p 8501:8501 \
-                  ${IMAGE_URI}
-                """
-            }
-        }
+            docker stop frontend || true
+            docker rm frontend || true
 
-    }
+            docker pull \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-    post {
-        success {
-            echo "Deployment Successful"
-        }
+            docker run -d \
+              --name frontend \
+              --restart always \
+              -p 8501:8501 \
+              $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-        failure {
-            echo "Deployment Failed"
-        }
-    }
-}
+            docker ps -a
