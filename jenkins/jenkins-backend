@@ -1,105 +1,82 @@
-pipeline {
-    agent any
+name: Backend CI/CD
 
-    environment {
-        AWS_REGION      = "us-east-1"
-        AWS_ACCOUNT_ID  = "341221860475"
+on:
+# push:
+#  branches:
+#   - main
+  workflow_dispatch:
 
-        ECR_REPO        = "backend"
-        IMAGE_TAG       = "${BUILD_NUMBER}"
-        IMAGE_URI       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:${IMAGE_TAG}"
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: 891377138880
+  ECR_REPOSITORY: backend
+  IMAGE_TAG: ${{ github.run_number }}
 
-        CONTAINER_NAME  = "backend"
-        CONTAINER_PORT  = "8084"
-    }
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest
 
-    stages {
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-        stage('Clean Workspace') {
-            steps {
-                cleanWs()
-            }
-        }
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-        stage('Checkout') {
-            steps {
-                git branch: 'main',
-                    url: 'https://github.com/CloudTechDevOps/Java-springboot-project.git'
-            }
-        }
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
-        stage('Login to ECR') {
-            steps {
-                sh '''
-                aws ecr get-login-password --region ${AWS_REGION} | \
-                docker login --username AWS --password-stdin \
-                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-                '''
-            }
-        }
+      - name: Build Docker Image
+        working-directory: backend
+        run: |
+          docker build -t $ECR_REPOSITORY:$IMAGE_TAG .
+          docker tag $ECR_REPOSITORY:$IMAGE_TAG \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-        stage('Build Docker Image') {
-            steps {
-                dir('backend') {
-                    sh '''
-                    docker build -t ${ECR_REPO}:${IMAGE_TAG} .
-                    docker tag ${ECR_REPO}:${IMAGE_TAG} ${IMAGE_URI}
-                    '''
-                }
-            }
-        }
+      - name: Push Image to ECR
+        run: |
+          docker push \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-        stage('Push Image') {
-            steps {
-                sh '''
-                docker push ${IMAGE_URI}
-                '''
-            }
-        }
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            AWS_REGION=us-east-1
+            AWS_ACCOUNT_ID=341221860475
+            ECR_REPOSITORY=backend
+            IMAGE_TAG=${{ github.run_number }}
 
-        stage('Deploy') {
-            steps {
-                sh '''
-                docker stop ${CONTAINER_NAME} || true
-                docker rm ${CONTAINER_NAME} || true
+            aws ecr get-login-password --region $AWS_REGION | \
+            docker login --username AWS --password-stdin \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
 
-                docker pull ${IMAGE_URI}
+            docker stop backend || true
+            docker rm backend || true
 
-                docker run -d \
-                  --name ${CONTAINER_NAME} \
-                  --restart always \
-                  -p 8084:8084 \
-                  -e MYSQL_HOST=database-1.c8lweogi44to.us-east-1.rds.amazonaws.com \
-                  -e MYSQL_PORT=3306 \
-                  -e MYSQL_USERNAME=admin \
-                  -e MYSQL_PASSWORD=Cloud123 \
-                  ${IMAGE_URI}
-                '''
-            }
-        }
+            docker pull \
+            $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-        stage('Health Check') {
-            steps {
-                sh '''
-                sleep 20
-                curl http://localhost:8084/actuator/health
-                '''
-            }
-        }
-    }
+            docker run -d \
+              --name backend \
+              --restart always \
+              -p 8084:8084 \
+              -e MYSQL_HOST=${{ secrets.MYSQL_HOST }} \
+              -e MYSQL_PORT=3306 \
+              -e MYSQL_USERNAME=${{ secrets.MYSQL_USERNAME }} \
+              -e MYSQL_PASSWORD=${{ secrets.MYSQL_PASSWORD }} \
+              $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY:$IMAGE_TAG
 
-    post {
-        success {
-            echo "Backend deployed successfully."
-        }
+            sleep 20
 
-        failure {
-            echo "Backend deployment failed."
-        }
+            curl http://localhost:8084/actuator/health
 
-        always {
-            sh 'docker ps -a'
-            sh 'docker images | head'
-        }
-    }
-}
+            docker ps -a
