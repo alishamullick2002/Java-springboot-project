@@ -29,62 +29,47 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ec2-user
           key: ${{ secrets.EC2_KEY }}
+          command_timeout: 20m
           script: |
             set -e
 
             APP_DIR=/home/ec2-user/app
             REPO_NAME=Java-springboot-project
-            REPO_URL=https://github.com/alishamullick2002/Java-springboot-project.git
 
-            mkdir -p $APP_DIR
-            cd $APP_DIR
+            cd $APP_DIR/$REPO_NAME/backend
 
-            if [ -d "$REPO_NAME/.git" ]; then
-              cd $REPO_NAME
-              git reset --hard
-              git pull origin main
-            else
-              git clone $REPO_URL
-              cd $REPO_NAME
-            fi
-
-            cd backend
+            echo "Building application..."
             mvn clean package -DskipTests
 
-            mkdir -p /var/log/app
+            echo "Stopping old application..."
 
-            pkill -f datastore-0.0.7.jar || true
-            sleep 5
+            PID=$(pgrep -f datastore-0.0.7.jar || true)
 
-            cd target
+            if [ -n "$PID" ]; then
+              kill "$PID"
+              sleep 5
+            fi
+
+            sudo mkdir -p /var/log/app
+            sudo chown ec2-user:ec2-user /var/log/app
+
+            echo "Starting application..."
 
             nohup env \
-            MYSQL_HOST=${{ secrets.DB_HOST }} \
-            MYSQL_USERNAME=${{ secrets.DB_USERNAME }} \
-            MYSQL_PASSWORD=${{ secrets.DB_PASSWORD }} \
-            LOG_FILE_PATH=/var/log/app/datastore.log \
-            java -jar datastore-0.0.7.jar --server.port=8084 \
-            >/var/log/app/nohup.out 2>&1 &
+              MYSQL_HOST="${{ secrets.DB_HOST }}" \
+              MYSQL_USERNAME="${{ secrets.DB_USERNAME }}" \
+              MYSQL_PASSWORD="${{ secrets.DB_PASSWORD }}" \
+              LOG_FILE_PATH=/var/log/app/datastore.log \
+              java -jar target/datastore-0.0.7.jar --server.port=8084 \
+              >/var/log/app/nohup.out 2>&1 < /dev/null &
 
+            disown
+
+            echo "Waiting for application..."
             sleep 20
 
-            echo "Java Process:"
-            ps -ef | grep datastore || true
+            echo "Running Java process:"
+            ps -ef | grep datastore | grep -v grep
 
-            echo "Health Check"
-
-            for i in {1..12}
-            do
-              if curl -fs http://localhost:8084/actuator/health; then
-                echo "Application is UP"
-                exit 0
-              fi
-              echo "Waiting for application..."
-              sleep 5
-            done
-
-            echo "Application failed to start"
-
-            tail -100 /var/log/app/nohup.out || true
-
-            exit 1
+            echo "Health Check:"
+            curl -f http://localhost:8084/actuator/health
