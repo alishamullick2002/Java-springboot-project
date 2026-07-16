@@ -51,7 +51,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             AWS_REGION=us-east-1
-            AWS_ACCOUNT_ID=341221860475
+            AWS_ACCOUNT_ID=891377138880
             ECR_REPOSITORY=backend
             IMAGE_TAG=${{ github.run_number }}
 
