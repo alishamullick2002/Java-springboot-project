@@ -1,4 +1,9 @@
-- name: Deploy Application
+name: Backend to EC2
+
+on:
+  workflow_dispatch:
+  
+  - name: Deploy Application
   uses: appleboy/ssh-action@v1.1.0
   with:
     host: ${{ secrets.EC2_HOST }}
