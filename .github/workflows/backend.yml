@@ -18,7 +18,7 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
           cache: maven
 
       - name: Prepare EC2
@@ -29,7 +29,7 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
             set -e
-            sudo yum install -y git maven java-17-amazon-corretto
+            sudo yum install -y git maven java-21-amazon-corretto
 
       - name: Clone / Pull Repository
         uses: appleboy/ssh-action@v1.1.0
@@ -41,7 +41,7 @@ jobs:
             set -e
             APP_DIR=/home/ec2-user/app
             REPO_NAME=Java-springboot-project
-            REPO_URL=https://github.com/CloudTechDevOps/Java-springboot-project.git
+            REPO_URL=https://github.com/alishamullick2002/Java-springboot-project.git
             mkdir -p $APP_DIR
             cd $APP_DIR
             if [ -d "$REPO_NAME/.git" ]; then
