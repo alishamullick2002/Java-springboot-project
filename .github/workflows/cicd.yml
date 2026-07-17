@@ -32,7 +32,6 @@ jobs:
             --region $AWS_REGION >/dev/null 2>&1; then
             echo "Backend repository already exists."
           else
-            echo "Creating backend repository..."
             aws ecr create-repository \
               --repository-name backend \
               --image-scanning-configuration scanOnPush=true \
@@ -46,7 +45,6 @@ jobs:
             --region $AWS_REGION >/dev/null 2>&1; then
             echo "Frontend repository already exists."
           else
-            echo "Creating frontend repository..."
             aws ecr create-repository \
               --repository-name frontend \
               --image-scanning-configuration scanOnPush=true \
@@ -54,45 +52,38 @@ jobs:
           fi
 
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       ##################################################
-      # BACKEND
+      # BUILD & PUSH BACKEND
       ##################################################
 
-      - name: Build Backend Docker Image
-        run: |
-          docker build \
-            -t backend:latest \
-            ./backend
+      - name: Build Backend Image
+        run: docker build -t backend:latest ./backend
 
-      - name: Tag Backend Docker Image
+      - name: Tag Backend Image
         run: |
           docker tag backend:latest \
           $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/backend:latest
 
-      - name: Push Backend Docker Image
+      - name: Push Backend Image
         run: |
           docker push \
           $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/backend:latest
 
       ##################################################
-      # FRONTEND
+      # BUILD & PUSH FRONTEND
       ##################################################
 
-      - name: Build Frontend Docker Image
-        run: |
-          docker build \
-            -t frontend:latest \
-            ./frontend
+      - name: Build Frontend Image
+        run: docker build -t frontend:latest ./frontend
 
-      - name: Tag Frontend Docker Image
+      - name: Tag Frontend Image
         run: |
           docker tag frontend:latest \
           $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:latest
 
-      - name: Push Frontend Docker Image
+      - name: Push Frontend Image
         run: |
           docker push \
           $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:latest
@@ -119,22 +110,43 @@ jobs:
               --password-stdin \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-            echo "Pulling latest backend image..."
+            echo "Pulling latest images..."
 
             sudo docker pull \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:latest
 
-            echo "Pulling latest frontend image..."
-
             sudo docker pull \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:latest
 
-            echo "Stopping old backend container..."
+            echo "Stopping old containers..."
 
             sudo docker stop backend || true
             sudo docker rm backend || true
 
-            echo "Stopping old frontend container..."
-
             sudo docker stop frontend || true
             sudo docker rm frontend || true
+
+            echo "Starting Backend Container..."
+
+            sudo docker run -d \
+              --name backend \
+              --restart unless-stopped \
+              -p 8084:8084 \
+              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:latest
+
+            echo "Starting Frontend Container..."
+
+            sudo docker run -d \
+              --name frontend \
+              --restart unless-stopped \
+              -p 80:80 \
+              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:latest
+
+            echo "Removing unused images..."
+
+            sudo docker image prune -af
+
+            echo "Deployment completed successfully."
+
+            echo "Running Containers:"
+            sudo docker ps
