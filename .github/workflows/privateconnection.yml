@@ -1,0 +1,100 @@
+name: Build, Push to ECR and Deploy using SSM
+
+on:
+  workflow_dispatch:
+  # push:
+  #   branches:
+  #     - main
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+  BACKEND_REPO: backend
+  FRONTEND_REPO: frontend
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create Backend ECR Repository
+        run: |
+          aws ecr describe-repositories \
+            --repository-names backend \
+            || aws ecr create-repository \
+            --repository-name backend
+
+      - name: Create Frontend ECR Repository
+        run: |
+          aws ecr describe-repositories \
+            --repository-names frontend \
+            || aws ecr create-repository \
+            --repository-name frontend
+
+      - name: Build Backend Image
+        run: |
+          docker build -t backend:latest ./backend
+
+      - name: Build Frontend Image
+        run: |
+          docker build -t frontend:latest ./frontend
+
+      - name: Tag Backend Image
+        run: |
+          docker tag backend:latest \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/backend:latest
+
+      - name: Tag Frontend Image
+        run: |
+          docker tag frontend:latest \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:latest
+
+      - name: Push Backend Image
+        run: |
+          docker push \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/backend:latest
+
+      - name: Push Frontend Image
+        run: |
+          docker push \
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:latest
+
+      - name: Deploy using AWS SSM
+        run: |
+
+          aws ssm send-command \
+            --instance-ids "${{ secrets.INSTANCE_ID }}" \
+            --document-name "AWS-RunShellScript" \
+            --comment "Deploy Docker Containers" \
+            --parameters 'commands=[
+            "sudo docker stop backend || true",
+            "sudo docker rm backend || true",
+            "sudo docker stop frontend || true",
+            "sudo docker rm frontend || true",
+            "aws ecr get-login-password --region '${{ secrets.AWS_REGION }}' | sudo docker login --username AWS --password-stdin '${{ secrets.AWS_ACCOUNT_ID }}'.dkr.ecr.'${{ secrets.AWS_REGION }}'.amazonaws.com",
+            "sudo docker pull '${{ secrets.AWS_ACCOUNT_ID }}'.dkr.ecr.'${{ secrets.AWS_REGION }}'.amazonaws.com/backend:latest",
+            "sudo docker pull '${{ secrets.AWS_ACCOUNT_ID }}'.dkr.ecr.'${{ secrets.AWS_REGION }}'.amazonaws.com/frontend:latest",
+            "sudo docker run -d --name backend -p 8084:8084 -e SPRING_DATASOURCE_URL=jdbc:mysql://alisha-db.c2jcgmu24q8a.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true -e SPRING_DATASOURCE_USERNAME=admin -e SPRING_DATASOURCE_PASSWORD=alisha123 '${{ secrets.AWS_ACCOUNT_ID }}'.dkr.ecr.'${{ secrets.AWS_REGION }}'.amazonaws.com/backend:latest",
+            "sudo docker run -d --name frontend -p 8501:8501 '${{ secrets.AWS_ACCOUNT_ID }}'.dkr.ecr.'${{ secrets.AWS_REGION }}'.amazonaws.com/frontend:latest",
+            "sudo docker ps"
+            ]'
+
+      - name: Wait for Deployment
+        run: sleep 30
+
+      - name: Verify SSM Connection
+        run: |
+          aws ssm describe-instance-information
