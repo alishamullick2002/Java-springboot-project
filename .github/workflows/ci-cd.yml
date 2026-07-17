@@ -1,9 +1,9 @@
 name: Build, Push to ECR and Deploy Docker
 
 on:
-   push:
-     branches:
-      - main
+  # push:
+  #   branches:
+  #     - main
   workflow_dispatch:
 
 env:
