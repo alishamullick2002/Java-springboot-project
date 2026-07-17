@@ -1,0 +1,68 @@
+name: Build and Deploy Docker
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Build Backend Image
+        run: |
+          docker build \
+            -t backend:latest \
+            ./backend
+
+      - name: Build Frontend Image
+        run: |
+          docker build \
+            -t frontend:latest \
+            ./frontend
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.1.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd /home/ec2-user
+
+            if [ ! -d Java-springboot-project ]; then
+              git clone https://github.com/alishamullick2002/Java-springboot-project.git
+            fi
+
+            cd Java-springboot-project
+
+            git pull origin main
+
+            echo "Building backend..."
+            docker build -t backend:latest ./backend
+
+            echo "Building frontend..."
+            docker build -t frontend:latest ./frontend
+
+            docker stop backend || true
+            docker rm backend || true
+
+            docker stop frontend || true
+            docker rm frontend || true
+
+            docker run -d \
+              --name backend \
+              -p 8084:8084 \
+              -e SPRING_DATASOURCE_URL="jdbc:mysql://alisha-db.c2jcgmu24q8a.us-east-1.rds.amazonaws.com:3306/datastore?createDatabaseIfNotExist=true" \
+              -e SPRING_DATASOURCE_USERNAME=admin \
+              -e SPRING_DATASOURCE_PASSWORD=alisha123 \
+              backend:latest
+
+            docker run -d \
+              --name frontend \
+              -p 8501:8501 \
+              frontend:latest
