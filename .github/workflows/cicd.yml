@@ -1,4 +1,4 @@
-name: Build, Push to ECR and Deploy
+name: Build Push ECR and Deploy
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
-  REPO_NAME: ${{ github.event.repository.name }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
 
 jobs:
   deploy:
@@ -25,62 +25,81 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Set ECR Repository Names
-        run: |
-          echo "BACKEND_REPO=${REPO_NAME}-backend" >> $GITHUB_ENV
-          echo "FRONTEND_REPO=${REPO_NAME}-frontend" >> $GITHUB_ENV
-
       - name: Create Backend ECR Repository
         run: |
-          aws ecr describe-repositories \
-            --repository-names $BACKEND_REPO \
-            --region $AWS_REGION >/dev/null 2>&1 || \
-          aws ecr create-repository \
-            --repository-name $BACKEND_REPO \
-            --image-scanning-configuration scanOnPush=true \
-            --region $AWS_REGION
+          if aws ecr describe-repositories \
+            --repository-names backend \
+            --region $AWS_REGION >/dev/null 2>&1; then
+            echo "Backend repository already exists."
+          else
+            echo "Creating backend repository..."
+            aws ecr create-repository \
+              --repository-name backend \
+              --image-scanning-configuration scanOnPush=true \
+              --region $AWS_REGION
+          fi
 
       - name: Create Frontend ECR Repository
         run: |
-          aws ecr describe-repositories \
-            --repository-names $FRONTEND_REPO \
-            --region $AWS_REGION >/dev/null 2>&1 || \
-          aws ecr create-repository \
-            --repository-name $FRONTEND_REPO \
-            --image-scanning-configuration scanOnPush=true \
-            --region $AWS_REGION
+          if aws ecr describe-repositories \
+            --repository-names frontend \
+            --region $AWS_REGION >/dev/null 2>&1; then
+            echo "Frontend repository already exists."
+          else
+            echo "Creating frontend repository..."
+            aws ecr create-repository \
+              --repository-name frontend \
+              --image-scanning-configuration scanOnPush=true \
+              --region $AWS_REGION
+          fi
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build Backend Image
-        run: |
-          docker build -t backend ./backend
+      ##################################################
+      # BACKEND
+      ##################################################
 
-      - name: Tag Backend Image
+      - name: Build Backend Docker Image
+        run: |
+          docker build \
+            -t backend:latest \
+            ./backend
+
+      - name: Tag Backend Docker Image
         run: |
           docker tag backend:latest \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:latest
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/backend:latest
 
-      - name: Push Backend Image
+      - name: Push Backend Docker Image
         run: |
           docker push \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$BACKEND_REPO:latest
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/backend:latest
 
-      - name: Build Frontend Image
+      ##################################################
+      # FRONTEND
+      ##################################################
+
+      - name: Build Frontend Docker Image
         run: |
-          docker build -t frontend ./frontend
+          docker build \
+            -t frontend:latest \
+            ./frontend
 
-      - name: Tag Frontend Image
+      - name: Tag Frontend Docker Image
         run: |
           docker tag frontend:latest \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:latest
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:latest
 
-      - name: Push Frontend Image
+      - name: Push Frontend Docker Image
         run: |
           docker push \
-          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.$AWS_REGION.amazonaws.com/$FRONTEND_REPO:latest
+          $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/frontend:latest
+
+      ##################################################
+      # DEPLOY TO EC2
+      ##################################################
 
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.1.0
@@ -89,38 +108,33 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | \
+            set -e
+
+            echo "Logging into Amazon ECR..."
+
+            aws ecr get-login-password \
+              --region ${{ secrets.AWS_REGION }} | \
             sudo docker login \
               --username AWS \
               --password-stdin \
               ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
 
-            sudo docker pull \
-              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ github.event.repository.name }}-backend:latest
+            echo "Pulling latest backend image..."
 
             sudo docker pull \
-              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ github.event.repository.name }}-frontend:latest
+              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/backend:latest
+
+            echo "Pulling latest frontend image..."
+
+            sudo docker pull \
+              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/frontend:latest
+
+            echo "Stopping old backend container..."
 
             sudo docker stop backend || true
             sudo docker rm backend || true
 
+            echo "Stopping old frontend container..."
+
             sudo docker stop frontend || true
             sudo docker rm frontend || true
-
-            sudo docker run -d \
-              --name backend \
-              --restart unless-stopped \
-              -p 8084:8084 \
-              -e SPRING_DATASOURCE_URL="${{ secrets.DB_URL }}" \
-              -e SPRING_DATASOURCE_USERNAME="${{ secrets.DB_USERNAME }}" \
-              -e SPRING_DATASOURCE_PASSWORD="${{ secrets.DB_PASSWORD }}" \
-              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ github.event.repository.name }}-backend:latest
-
-            sudo docker run -d \
-              --name frontend \
-              --restart unless-stopped \
-              -p 8501:8501 \
-              -e API_URL="http://<EC2_PUBLIC_IP>:8084" \
-              ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ github.event.repository.name }}-frontend:latest
-
-            sudo docker ps
