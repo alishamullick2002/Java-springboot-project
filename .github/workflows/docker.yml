@@ -1,9 +1,11 @@
 name: Build and Deploy Docker
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+  # Uncomment the following to deploy automatically on every push to main
+  # push:
+  #   branches:
+  #     - main
 
 jobs:
   deploy:
